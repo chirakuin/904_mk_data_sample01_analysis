@@ -1,0 +1,15 @@
+[project]
+name = "cdp-golden-path-analysis"
+version = "2.0.0"
+description = "Golden Path Analysis for CDP data - identify touchpoint sequences common to high-value customers"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0",
+    "httpx>=0.25",
+    "python-dotenv>=1.0",
+    "scipy>=1.11",
+    "pyyaml>=6.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]

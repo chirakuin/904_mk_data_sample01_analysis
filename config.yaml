@@ -1,0 +1,137 @@
+# ============================================================
+# Golden Path Analysis - Configuration
+# ============================================================
+# このファイルをプロジェクトに合わせてカスタマイズしてください。
+# データソース、タッチポイント定義、アウトカム定義を変更するだけで
+# 異なるドメインのゴールデンパス分析が実行できます。
+
+# --- データソース ---
+data_source:
+  type: supabase  # supabase | csv
+  # Supabase の場合: .env に SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY を設定
+  # CSV の場合: csv_dir にCSVファイルのディレクトリを指定
+  csv_dir: ./data
+
+  # テーブル/ファイル名とカラムのマッピング
+  tables:
+    customer:
+      source: v_customer_summary  # テーブル名 or CSVファイル名
+      select: "*"
+      customer_id_col: unified_customer_id
+      first_date_col: first_known_date  # 顧客の最初の観測日カラム
+
+    purchase:
+      source: purchase_transaction
+      select: unified_customer_id,purchase_datetime,total_amount
+      customer_id_col: unified_customer_id
+      datetime_col: purchase_datetime
+
+    # --- タッチポイントソース（複数定義可能）---
+    touchpoint_sources:
+      digital:
+        source: digital_behavior_log
+        select: unified_customer_id,event_datetime,event_name
+        customer_id_col: unified_customer_id
+        datetime_col: event_datetime
+        classify_col: event_name
+
+      line:
+        source: line_interaction
+        select: unified_customer_id,event_datetime,event_type
+        customer_id_col: unified_customer_id
+        datetime_col: event_datetime
+        classify_col: event_type
+
+      ad:
+        source: ad_exposure
+        select: unified_customer_id,event_datetime,event_type
+        customer_id_col: unified_customer_id
+        datetime_col: event_datetime
+        classify_col: event_type
+
+      campaign:
+        source: campaign_participation
+        select: unified_customer_id,entry_datetime
+        customer_id_col: unified_customer_id
+        datetime_col: entry_datetime
+        # classify_col なし → 全行が同一コード
+
+      vending:
+        source: vending_machine_event
+        select: unified_customer_id,event_datetime,event_type
+        customer_id_col: unified_customer_id
+        datetime_col: event_datetime
+        classify_col: event_type
+
+# --- タッチポイント分類ルール ---
+# 各ソースのイベント値 → タッチポイントコードのマッピング
+touchpoint_mapping:
+  digital:
+    DIG_BROWSE:
+      - page_view
+      - search
+      - recipe_view
+    DIG_ENGAGE:
+      - product_click
+      - add_to_cart
+      - video_play
+      - campaign_entry_form
+      - campaign_entry_submit
+    # "purchase" イベントは除外（purchase_transaction で処理）
+
+  line:
+    LINE_ADD:
+      - friend_add
+    LINE_OPEN:
+      - message_opened
+    LINE_CLK:
+      - message_clicked
+
+  ad:
+    AD_IMP:
+      - impression
+    AD_CLK:
+      - click
+    AD_CVR:
+      - conversion
+
+  campaign:
+    CAMPAIGN: all  # classify_col なし → 全行にこのコードを付与
+
+  vending:
+    VENDING:
+      - purchase
+
+# --- タッチポイント抑制 ---
+suppress_codes:
+  - AD_IMP  # 高頻度・低シグナルのためデフォルト除外
+
+# --- ウィンドウ設計 ---
+windows:
+  observation_days: 60   # 観察窓（タッチポイント収集期間）
+  outcome_days: 90       # 成果判定窓
+  data_end_date: "2025-03-10"  # データの終端日
+
+# --- アウトカム定義 ---
+outcome:
+  # 成果判定窓内の購買回数でラベリング
+  metric: purchase_count   # purchase_count | purchase_amount | custom
+  threshold: 2             # この値以上 → outcome=1
+
+# --- 分析パラメータ ---
+analysis:
+  min_path_length: 3
+  min_support_ratio: 0.005    # max(10, eligible × この値)
+  min_support_floor: 10
+  ngram_sizes: [3, 5]
+  first_n_sizes: [3, 5]
+  top_k_report: 20
+  bootstrap_iterations: 100
+  bootstrap_sample_ratio: 0.8
+  stability_threshold: 0.70
+
+# --- 出力 ---
+output:
+  dir: ./output
+  run_full_mode: true        # 全タッチポイント含むモード
+  run_no_purchase_mode: true # PURCHASE除外モード
