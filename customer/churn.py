@@ -46,12 +46,13 @@ FEATURE_COLS = [
     "engagement_score",
     "clv_12m",
     "monthly_spend",
-    "churn_risk_score",
     "health_consciousness",
     "lifetime_points_earned",
     "purchase_count",
     "avg_purchase_amount",
-    "days_since_last_purchase",
+    # NOTE: 以下はデータリークのため除外
+    # - days_since_last_purchase: ラベル定義（>90日=離脱）そのもの
+    # - churn_risk_score: A01生成時にcustomer_statusと連動して算出
 ]
 
 
