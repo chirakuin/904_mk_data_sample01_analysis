@@ -1,16 +1,46 @@
-# Golden Path Analysis - 汎用ゴールデンパス分析フレームワーク
+# CDP Analysis Framework
 
-高価値顧客に共通するタッチポイント順序（ゴールデンパス）を特定する汎用分析ツール。`config.yaml` を編集するだけで、異なるドメイン・データソースに適用可能。
+CDPデータに対する17の分析を統合的に実行するフレームワーク。`config.yaml` を編集するだけで異なるドメイン・データソースに適用可能。
 
-## 特徴
+## 分析一覧
 
-- **config.yaml 駆動**: データソース・タッチポイント定義・アウトカム定義を設定ファイルで管理
-- **複数データソース対応**: Supabase REST API / CSV ファイル
-- **時系列リーク防止**: 観察窓 / 成果判定窓を分離
-- **統計的厳密性**: Fisher正確検定、95%CI、Bootstrap安定性
-- **2粒度比較**: 日次・週次の結果を照合
-- **2モード**: FULL（全タッチポイント）+ NO_PURCHASE（ナーチャリング導線分析）
-- **遷移確率分析**: 成果群 vs 非成果群の遷移確率差 → 介入ポイント候補
+### 顧客理解
+
+| # | 分析 | スクリプト | 概要 |
+|---|------|-----------|------|
+| C1 | クラスタリング | `customer/clustering.py` | KMeans（k=4,5,6自動選択）+ DBSCAN比較 |
+| C2 | ペルソナ分析 | （C1に統合） | クラスタの定性的な命名・特徴記述 |
+| C3 | コホート分析 | `customer/cohort.py` | 獲得月別のリテンションカーブ |
+| C4 | セグメント遷移 | `customer/segment_transition.py` | 四半期スナップショットの遷移行列 |
+| C5 | LTV予測 | `customer/ltv.py` | BG/NBD + Gamma-Gamma |
+| C6 | 離脱予測 | `customer/churn.py` | RandomForest + 特徴量重要度 |
+
+### パス・ジャーニー分析
+
+| # | 分析 | スクリプト | 概要 |
+|---|------|-----------|------|
+| J1 | ゴールデンパス | `journey/golden_path.py` | 高価値顧客の共通タッチポイント順序 |
+| J2 | アトリビューション | `journey/attribution.py` | マルコフ連鎖 + ラストタッチ + リニア |
+| J3 | バスケット分析 | `journey/basket.py` | Apriori併買 + 逐次購買パターン |
+| J4 | ファネル分析 | `journey/funnel.py` | デジタルファネル + LINE配信ファネル |
+
+### マーケティング効果測定
+
+| # | 分析 | スクリプト | 概要 |
+|---|------|-----------|------|
+| M1 | MMM | `effectiveness/mmm.py` | OLS回帰 + Adstock変換（ブランド別） |
+| M1b | クラスタ別MMM | `effectiveness/mmm_by_cluster.py` | クラスタごとのメディア弾性値・ROI比較 |
+| M2 | ROI予測 | `effectiveness/roi.py` | チャネル別ROI算出 |
+| M3 | CP効果分析 | `effectiveness/campaign.py` | 傾向スコアマッチング |
+| M4 | 増分効果測定 | `effectiveness/uplift.py` | CATE by Engagement Quartile |
+
+### 予測・最適化
+
+| # | 分析 | スクリプト | 概要 |
+|---|------|-----------|------|
+| P1 | 需要予測 | `prediction/demand.py` | SARIMAX + 外部変数 |
+| P2 | NBA | `prediction/nba.py` | ルールベース推薦（全分析結果を統合） |
+| P3 | 予算配分最適化 | `prediction/budget.py` | scipy.optimize (SLSQP) |
 
 ## クイックスタート
 
@@ -18,232 +48,137 @@
 cd A03_CDP_analysis
 cp .env.example .env    # Supabase利用時のみ
 uv sync
-uv run python golden_path_analysis.py
 ```
 
-## 他プロジェクトへの適用方法
+### 個別実行
 
-### 1. config.yaml を編集
+```bash
+uv run python customer/clustering.py
+uv run python journey/golden_path.py
+uv run python effectiveness/mmm.py
+# ... 各スクリプトは引数なしで独立実行可能
+```
+
+### Claude Code スキルによる実行
+
+```
+/analyze 1          # 番号で指定
+/analyze クラスタ    # キーワードで指定
+/analyze 19         # 顧客理解パック（C1-C6一括）
+/analyze 22         # フル分析（全スクリプト）
+```
+
+分析メニューの全リストは [ANALYSIS_CATALOG.md](ANALYSIS_CATALOG.md) を参照。
+
+### レポート生成
+
+```
+/report-technical clustering   # 技術レポート生成
+/report-executive clustering   # エグゼクティブ概要版に変換
+```
+
+## 実行順序と依存関係
+
+依存する分析がある場合、先に実行が必要。`/analyze` スキルは依存を自動解決する。
+
+```
+Phase 1: clustering, cohort, segment_transition, basket, funnel
+Phase 2: ltv, churn, attribution, golden_path
+Phase 3: mmm, campaign, uplift
+Phase 4: roi, demand, budget
+Phase 5: nba（最後、他の結果を参照）
+```
+
+## プロジェクト構成
+
+```
+A03_CDP_analysis/
+├── config.yaml                      # 共通設定（データソース・接続情報）
+├── pyproject.toml
+├── .env / .env.example
+│
+├── lib/
+│   └── data_loader.py               # 共通データローダー（Supabase/CSV両対応）
+│
+├── customer/                         # 顧客理解（C1-C6）
+│   ├── clustering.py, cohort.py, segment_transition.py
+│   ├── ltv.py, churn.py
+│
+├── journey/                          # パス・ジャーニー（J1-J4）
+│   ├── golden_path.py, attribution.py
+│   ├── basket.py, funnel.py
+│
+├── effectiveness/                    # 効果測定（M1-M4）
+│   ├── mmm.py, mmm_by_cluster.py, roi.py
+│   ├── campaign.py, uplift.py
+│
+├── prediction/                       # 予測・最適化（P1-P3）
+│   ├── demand.py, budget.py, nba.py
+│
+├── other/
+│   ├── REPORT.md                     # 技術レポート
+│   └── REPORT_EXECUTIVE.md           # エグゼクティブレポート
+│
+├── ANALYSIS_CATALOG.md              # 分析カタログ（全体設計図）
+│
+└── output/                          # 分析結果（JSON/CSV）
+    ├── clustering/, cohort/, segment_transition/
+    ├── ltv/, churn/
+    ├── attribution/, basket/, funnel/
+    ├── mmm/, roi/, roi_by_cluster/
+    ├── campaign/, uplift/
+    ├── demand/, budget/, nba/
+```
+
+## 設定（config.yaml）
+
+### データソース切り替え
 
 ```yaml
-# データソースを変更（Supabase or CSV）
 data_source:
-  type: csv                    # supabase → csv に変更
-  csv_dir: ./data              # CSVファイルの格納先
+  type: supabase  # supabase | csv
+  csv_dir: ./data
 
   tables:
     customer:
-      source: customers.csv    # ファイル名 or テーブル名
-      customer_id_col: user_id # 顧客IDカラム名
-      first_date_col: created_at  # 初回観測日カラム名
-
+      source: v_customer_summary      # テーブル名 or CSVファイル名
+      customer_id_col: unified_customer_id
+      first_date_col: first_known_date
     purchase:
-      source: orders.csv
-      customer_id_col: user_id
-      datetime_col: order_datetime
-
+      source: purchase_transaction
+      customer_id_col: unified_customer_id
+      datetime_col: purchase_datetime
     touchpoint_sources:
-      # 必要なソースだけ定義（不要なものは削除可）
-      email:
-        source: email_events.csv
-        customer_id_col: user_id
-        datetime_col: sent_at
-        classify_col: event_type
+      digital:
+        source: digital_behavior_log
+        customer_id_col: unified_customer_id
+        datetime_col: event_datetime
+        classify_col: event_name
+      # ... 他ソースも同様に定義
 ```
 
-### 2. タッチポイント分類を定義
+### 他プロジェクトへの適用
 
-```yaml
-touchpoint_mapping:
-  email:
-    EMAIL_OPEN:
-      - opened
-    EMAIL_CLK:
-      - clicked
-  # classify_col がないソースは "all" で全行に同一コードを付与
-  webinar:
-    WEBINAR: all
-```
+1. `config.yaml` の `data_source.tables` を自社のテーブル/カラム名に変更
+2. `touchpoint_mapping` でイベント値→タッチポイントコードを定義
+3. `outcome` で成果の定義（購買回数、金額等）を設定
+4. `windows` で観察窓・判定窓の長さを調整
 
-### 3. アウトカムを定義
+業界別の設定例は [ANALYSIS_CATALOG.md](ANALYSIS_CATALOG.md) を参照。
 
-```yaml
-outcome:
-  metric: purchase_count   # 判定窓内の購買回数
-  threshold: 2             # 2回以上 → 成果群
-```
+## 技術スタック
 
-### 4. ウィンドウ長を調整
+- **Python 3.10+** / uv
+- pandas, scikit-learn, scipy, statsmodels, lifetimes, mlxtend
+- データソース: Supabase REST API / CSV
 
-```yaml
-windows:
-  observation_days: 60     # 観察窓（タッチポイント収集期間）
-  outcome_days: 90         # 成果判定窓
-  data_end_date: "2025-03-10"  # データ終端日
-```
+## 関連プロジェクト
 
-## 業界別の設定例
-
-### EC / D2C
-```yaml
-windows:
-  observation_days: 30
-  outcome_days: 60
-touchpoint_mapping:
-  web:
-    BROWSE: [page_view, search]
-    ENGAGE: [add_to_cart, wishlist]
-  email:
-    EMAIL_OPEN: [opened]
-    EMAIL_CLK: [clicked]
-  sns:
-    SNS_CLK: [link_click]
-outcome:
-  threshold: 2
-```
-
-### SaaS
-```yaml
-windows:
-  observation_days: 14
-  outcome_days: 30
-touchpoint_mapping:
-  app:
-    LOGIN: [login]
-    FEATURE_USE: [feature_activated, report_created]
-    INVITE: [team_invite_sent]
-  email:
-    ONBOARD_OPEN: [onboarding_email_opened]
-    ONBOARD_CLK: [onboarding_email_clicked]
-outcome:
-  metric: purchase_count  # login_count等に差し替え可能
-  threshold: 5
-```
-
-### ゲーム
-```yaml
-windows:
-  observation_days: 7
-  outcome_days: 14
-touchpoint_mapping:
-  game:
-    TUTORIAL: [tutorial_complete]
-    PLAY: [stage_clear, pvp_match]
-    SOCIAL: [friend_add, guild_join]
-  push:
-    PUSH_OPEN: [push_opened]
-outcome:
-  threshold: 3  # 課金3回以上
-```
-
-## 設計思想: ウィンドウによる時系列リーク防止
-
-```
-顧客ごとの相対タイムライン:
-
-|← 観察窓 →|← 成果判定窓 →|
-Day 0       Day N          Day N+M
-(first_date)
-
-観察窓内の行動 → パス分析対象
-判定窓内の成果 → アウトカムラベル
-```
-
-観察窓と判定窓を分離することで「未来の情報で過去を評価する」リークを防止。
-
-## 出力ファイル
-
-FULLモードとNO_PURCHASEモードそれぞれに以下を出力:
-
-```
-output/
-├── full/
-│   ├── golden_paths_summary.json   # 全体サマリ
-│   ├── path_comparison_daily.csv   # パス統計（support, lift, OR, CI, p値, 安定性）
-│   ├── path_comparison_weekly.csv
-│   ├── customer_journeys.csv       # 顧客別シーケンス
-│   ├── transition_matrix_daily.csv # 遷移確率行列
-│   ├── transition_matrix_weekly.csv
-│   └── granularity_comparison.csv  # 日次vs週次の一致度
-└── no_purchase/
-    └── (同上)
-```
-
-## config.yaml パラメータ一覧
-
-### data_source
-
-| キー | 説明 | 例 |
-|------|------|-----|
-| `type` | データソース種別 | `supabase` / `csv` |
-| `csv_dir` | CSVディレクトリ（type=csv時） | `./data` |
-| `tables.customer.source` | 顧客テーブル/ファイル名 | `v_customer_summary` |
-| `tables.customer.customer_id_col` | 顧客IDカラム | `unified_customer_id` |
-| `tables.customer.first_date_col` | 初回観測日カラム | `first_known_date` |
-| `tables.purchase.source` | 購買テーブル/ファイル名 | `purchase_transaction` |
-| `tables.purchase.datetime_col` | 購買日時カラム | `purchase_datetime` |
-| `tables.touchpoint_sources.*` | タッチポイントソース定義 | 複数定義可能 |
-
-### touchpoint_mapping
-
-| キー | 説明 |
-|------|------|
-| `{source}.{CODE}` | イベント値のリスト → タッチポイントコードにマッピング |
-| `{source}.{CODE}: all` | classify_col なしの場合、全行にこのコードを付与 |
-
-### windows
-
-| キー | デフォルト | 説明 |
-|------|-----------|------|
-| `observation_days` | 60 | 観察窓（日数） |
-| `outcome_days` | 90 | 成果判定窓（日数） |
-| `data_end_date` | 2025-03-10 | データ終端日 |
-
-### outcome
-
-| キー | デフォルト | 説明 |
-|------|-----------|------|
-| `metric` | purchase_count | 成果指標 |
-| `threshold` | 2 | 成果群の閾値（以上） |
-
-### analysis
-
-| キー | デフォルト | 説明 |
-|------|-----------|------|
-| `min_path_length` | 3 | 最低パス長 |
-| `min_support_ratio` | 0.005 | 最低サポート比率 |
-| `min_support_floor` | 10 | 最低サポート下限 |
-| `ngram_sizes` | [3, 5] | N-gramサイズ |
-| `first_n_sizes` | [3, 5] | First-N抽出サイズ |
-| `top_k_report` | 20 | レポート上位K件 |
-| `bootstrap_iterations` | 100 | Bootstrap反復回数 |
-| `bootstrap_sample_ratio` | 0.8 | Bootstrapサンプル比率 |
-
-### output
-
-| キー | デフォルト | 説明 |
-|------|-----------|------|
-| `dir` | ./output | 出力ディレクトリ |
-| `run_full_mode` | true | FULLモード実行 |
-| `run_no_purchase_mode` | true | PURCHASE除外モード実行 |
-
-### suppress_codes
-
-パスから除外するタッチポイントコードのリスト（例: `AD_IMP`）。
-
-## 統計指標
-
-各パスについて以下を算出:
-
-| 指標 | 説明 |
-|------|------|
-| Support (成果群/非成果群) | 各群でのパス出現率 |
-| Lift | 成果群Support / 非成果群Support |
-| 差分 | 成果群Support - 非成果群Support |
-| オッズ比 (OR) | 関連の強さ |
-| 95% CI | オッズ比の信頼区間 |
-| p値 | Fisher正確検定（有意性） |
-| 安定性 | Bootstrap 100回での再現率 |
+| プロジェクト | 役割 |
+|-------------|------|
+| A01 (CDP Data Generator) | 合成CDPデータ生成（18エンティティ・491K行） |
+| **A03 (CDP Analysis)** | 本プロジェクト。17分析の実行・レポート生成 |
+| A04 (CDP Person Model) | SDA — 分析結果を基にした顧客意思決定モデル |
 
 ## Claude Code メモリ
 
