@@ -114,8 +114,10 @@ def compute_association_rules(
     te_array = te.fit(transactions).transform(transactions)
     df_encoded = pd.DataFrame(te_array, columns=te.columns_)
 
-    print(f"  Running Apriori (min_support={MIN_SUPPORT})...")
-    frequent_items = apriori(df_encoded, min_support=MIN_SUPPORT, use_colnames=True)
+    print(f"  Running Apriori (min_support={MIN_SUPPORT}, max_len=2)...")
+    frequent_items = apriori(
+        df_encoded, min_support=MIN_SUPPORT, use_colnames=True, max_len=2
+    )
     print(f"  Frequent itemsets: {len(frequent_items)}")
 
     if frequent_items.empty:
@@ -170,19 +172,25 @@ def compute_sequential_rules(
     print(f"\n  Computing sequential patterns (window={window_days} days)...")
 
     for cid, group in df.groupby("unified_customer_id"):
-        purchases = list(
-            zip(group["product_name"], group["purchase_dt"])
-        )
+        # Deduplicate: keep first purchase per product per customer for sequential analysis
+        seen_products = set()
+        purchases = []
+        for _, row in group.iterrows():
+            prod = row["product_name"]
+            product_buyers[prod].add(cid)
+            purchases.append((prod, row["purchase_dt"]))
 
+        # Only check unique product pairs within window (skip same-product repeats)
         for i, (prod_a, dt_a) in enumerate(purchases):
-            product_buyers[prod_a].add(cid)
+            seen_in_window = set()
             for j in range(i + 1, len(purchases)):
                 prod_b, dt_b = purchases[j]
                 delta = (dt_b - dt_a).days
                 if delta > window_days:
                     break
-                if prod_a != prod_b:
+                if prod_a != prod_b and prod_b not in seen_in_window:
                     sequential_pairs[(prod_a, prod_b)].add(cid)
+                    seen_in_window.add(prod_b)
 
     # Build rules
     rows = []
