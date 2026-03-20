@@ -32,26 +32,43 @@ from lib.data_loader import fetch_all, get_supabase_client, load_config
 PROJECT_ROOT = Path(__file__).parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "output" / "clustering"
 
-FEATURE_COLS = [
-    "engagement_score",
-    "churn_risk_score",
-    "clv_12m",
-    "monthly_spend",
+# クラスタリング特徴量: 嗜好・属性軸のみ
+# 除外するもの:
+#   金額系（clv_12m, monthly_spend, lifetime_points_earned）→ 結果指標
+#   エンゲージメント系（engagement_score, churn_risk_score）→ 当然の結果で分離するだけ
+# 採用するもの:
+#   「何が好きか」「どんな人か」→ 施策の方向性が決まる軸
+FEATURE_COLS_NUMERIC = [
     "health_consciousness",
-    "lifetime_points_earned",
 ]
+FEATURE_COLS_BINARY = [
+    "is_alcohol_eligible",  # 酒類適格（行動を大きく分ける軸）
+]
+FEATURE_COLS_CATEGORICAL = [
+    "gender",               # 性別（商品選好に直結）
+    "preferred_category",   # 嗜好カテゴリ（最頻購買カテゴリ）
+    "registration_source",  # 登録チャネル（チャネル親和性の代理変数）
+]
+# 内部的に結合して使う
+FEATURE_COLS = FEATURE_COLS_NUMERIC + FEATURE_COLS_BINARY + FEATURE_COLS_CATEGORICAL
 
+# プロファイル用（クラスタの特徴記述に使う。金額はここで確認）
 PROFILE_COLS = [
     "unified_customer_id",
     "engagement_score",
     "churn_risk_score",
+    "health_consciousness",
+    "is_alcohol_eligible",
     "clv_12m",
     "monthly_spend",
-    "health_consciousness",
     "lifetime_points_earned",
     "prefecture",
     "membership_tier",
     "gender",
+    "age_band",
+    "registration_source",
+    "preferred_category",
+    "rfm_segment",
 ]
 
 
@@ -82,19 +99,49 @@ def fetch_customer_summary(cfg: dict) -> pd.DataFrame:
 def prepare_features(df: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray, StandardScaler]:
     """Fill missing values and scale features."""
     df_work = df.copy()
-    for col in FEATURE_COLS:
+
+    # --- 数値特徴量 ---
+    for col in FEATURE_COLS_NUMERIC:
         if col not in df_work.columns:
             print(f"  WARNING: {col} not found, filling with 0")
             df_work[col] = 0.0
         else:
+            df_work[col] = pd.to_numeric(df_work[col], errors="coerce")
             median_val = df_work[col].median()
             n_missing = df_work[col].isna().sum()
             if n_missing > 0:
-                print(f"  {col}: {n_missing} missing values filled with median ({median_val:.2f})")
+                print(f"  {col}: {n_missing} missing → median ({median_val:.2f})")
             df_work[col] = df_work[col].fillna(median_val)
 
+    # --- バイナリ特徴量 ---
+    for col in FEATURE_COLS_BINARY:
+        if col in df_work.columns:
+            df_work[col] = df_work[col].map(
+                {"true": 1, "True": 1, True: 1, "false": 0, "False": 0, False: 0}
+            ).fillna(0).astype(float)
+        else:
+            df_work[col] = 0.0
+
+    # --- カテゴリ特徴量 → one-hot ---
+    for col in FEATURE_COLS_CATEGORICAL:
+        if col not in df_work.columns:
+            print(f"  WARNING: {col} not found, skipping")
+            continue
+        df_work[col] = df_work[col].fillna("unknown")
+
+    dummies = pd.get_dummies(df_work[FEATURE_COLS_CATEGORICAL], prefix=FEATURE_COLS_CATEGORICAL, drop_first=False)
+    print(f"  One-hot encoded: {FEATURE_COLS_CATEGORICAL} → {len(dummies.columns)} columns")
+
+    # 結合
+    feature_matrix = pd.concat([
+        df_work[FEATURE_COLS_NUMERIC + FEATURE_COLS_BINARY].reset_index(drop=True),
+        dummies.reset_index(drop=True),
+    ], axis=1)
+
+    all_feature_names = list(feature_matrix.columns)
+
     scaler = StandardScaler()
-    X = scaler.fit_transform(df_work[FEATURE_COLS].values)
+    X = scaler.fit_transform(feature_matrix.values)
     return df_work, X, scaler
 
 
@@ -169,24 +216,22 @@ def generate_profiles(df: pd.DataFrame, labels: np.ndarray) -> list[dict]:
             "pct": round(len(group) / len(df_c) * 100, 1),
         }
 
-        # Numeric feature stats
-        for col in FEATURE_COLS:
+        # Numeric feature stats (clustering features + result metrics)
+        numeric_cols = FEATURE_COLS_NUMERIC + FEATURE_COLS_BINARY + [
+            "engagement_score", "churn_risk_score",  # 結果指標として表示
+            "clv_12m", "monthly_spend", "lifetime_points_earned",
+        ]
+        for col in numeric_cols:
             if col in group.columns:
-                profile[f"{col}_mean"] = round(float(group[col].mean()), 2)
-                profile[f"{col}_median"] = round(float(group[col].median()), 2)
+                vals = pd.to_numeric(group[col], errors="coerce")
+                profile[f"{col}_mean"] = round(float(vals.mean()), 2)
+                profile[f"{col}_median"] = round(float(vals.median()), 2)
 
         # Categorical top values
-        if "prefecture" in group.columns:
-            top_pref = group["prefecture"].mode()
-            profile["top_prefecture"] = str(top_pref.iloc[0]) if len(top_pref) > 0 else "N/A"
-
-        if "membership_tier" in group.columns:
-            top_tier = group["membership_tier"].mode()
-            profile["top_membership_tier"] = str(top_tier.iloc[0]) if len(top_tier) > 0 else "N/A"
-
-        if "gender" in group.columns:
-            top_gender = group["gender"].mode()
-            profile["top_gender"] = str(top_gender.iloc[0]) if len(top_gender) > 0 else "N/A"
+        for col in FEATURE_COLS_CATEGORICAL + ["prefecture", "membership_tier", "age_band", "rfm_segment"]:
+            if col in group.columns:
+                top_val = group[col].mode()
+                profile[f"top_{col}"] = str(top_val.iloc[0]) if len(top_val) > 0 else "N/A"
 
         profiles.append(profile)
 
@@ -271,13 +316,17 @@ def main() -> None:
     print(f"\nCluster profiles:")
     for p in profiles:
         print(f"\n  Cluster {p['cluster']}:")
-        for col in FEATURE_COLS:
+        # Numeric stats
+        for col in FEATURE_COLS_NUMERIC + FEATURE_COLS_BINARY + [
+            "engagement_score", "churn_risk_score", "clv_12m", "monthly_spend",
+        ]:
             mean_key = f"{col}_mean"
             if mean_key in p:
-                print(f"    {col}: mean={p[mean_key]}, median={p[f'{col}_median']}")
-        for cat_key in ["top_prefecture", "top_membership_tier", "top_gender"]:
-            if cat_key in p:
-                print(f"    {cat_key}: {p[cat_key]}")
+                print(f"    {col}: mean={p[mean_key]}, median={p.get(f'{col}_median', 'N/A')}")
+        # Categorical top values
+        for key, val in p.items():
+            if key.startswith("top_"):
+                print(f"    {key}: {val}")
 
     print(f"\nDBSCAN comparison: {dbscan_info['n_clusters']} clusters, "
           f"{dbscan_info['n_noise']} noise, silhouette={dbscan_info['silhouette_score']:.4f}")
